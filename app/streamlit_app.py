@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +19,7 @@ from src.config import OPENAI_MODEL
 from src.data_loader import DataLoader
 from src.llm_client import LLMClient
 from src.pattern_quality import confidence_rank, filtered_result, is_submission_ready
-from src.pattern_detector import PatternDetector
+from src.reasoning_graph import ClaryReasoningGraph
 from src.schemas import AnalysisResult, DetectedStructure, HealthPattern
 from src.timeline_builder import TimelineBuilder
 
@@ -182,6 +182,7 @@ def init_state() -> None:
         "structure": None,
         "analysis_result": None,
         "pattern_detector": None,
+        "graph_trace": [],
         "chat_messages": [],
         "selected_user": "All users",
     }
@@ -200,6 +201,7 @@ def render_header() -> None:
             <p class="subtitle">Cross-conversation health pattern reasoning for the Ask First assignment.</p>
             <div class="pill-row">
                 <span class="pill">Model: {OPENAI_MODEL}</span>
+                <span class="pill">LangGraph workflow</span>
                 <span class="pill">Strict JSON output</span>
                 <span class="pill">Temporal reasoning</span>
                 <span class="pill">Evidence trace</span>
@@ -300,30 +302,21 @@ def run_analysis(structure: DetectedStructure) -> AnalysisResult:
     if not llm.is_configured():
         raise RuntimeError("OpenAI API key not configured. Set OPENAI_API_KEY in .env.")
 
-    detector = PatternDetector(llm)
-    patterns: list[HealthPattern] = []
-    progress = st.progress(0, text="Preparing timelines...")
+    reasoning_graph = ClaryReasoningGraph(llm)
+    progress = st.progress(0, text="Running LangGraph reasoning workflow...")
     status = st.empty()
 
-    for index, user in enumerate(structure.users, start=1):
-        status.info(f"Analyzing {user.user_id} ({index}/{len(structure.users)})")
-        analysis = detector.analyze_user(
-            user,
-            structure.conversations.get(user.user_id, []),
-        )
-        patterns.extend(analysis.patterns)
-        progress.progress(index / len(structure.users), text=f"Completed {user.user_id}")
+    status.info("LangGraph nodes: prepare timelines -> detect -> verify -> score -> format")
+    progress.progress(0.15, text="Preparing graph state...")
+    graph_run = reasoning_graph.run(structure)
+    progress.progress(1.0, text="LangGraph workflow complete.")
 
     status.empty()
     progress.empty()
-    st.session_state.pattern_detector = detector
+    st.session_state.pattern_detector = graph_run.detector
+    st.session_state.graph_trace = graph_run.graph_trace
 
-    return AnalysisResult(
-        analysis_timestamp=datetime.now(timezone.utc).isoformat(),
-        total_users=len(structure.users),
-        total_patterns=len(patterns),
-        patterns=patterns,
-    )
+    return graph_run.result
 
 
 def render_result_metrics(result: AnalysisResult, structure: DetectedStructure) -> None:
@@ -494,6 +487,25 @@ def render_chat_tab(result: AnalysisResult) -> None:
     st.rerun()
 
 
+def render_graph_tab() -> None:
+    """Render LangGraph execution trace."""
+
+    st.caption("This shows the explicit LangGraph workflow used for this analysis run.")
+    st.code(
+        "START -> prepare_timelines -> detect_patterns -> verify_patterns -> "
+        "score_and_sort -> format_output -> END",
+        language="text",
+    )
+
+    trace = st.session_state.get("graph_trace", [])
+    if not trace:
+        st.info("Run analysis to see the LangGraph execution trace.")
+        return
+
+    for index, item in enumerate(trace, start=1):
+        st.markdown(f"{index}. {item}")
+
+
 def render_json_tab(result: AnalysisResult) -> None:
     """Render strict JSON output and download control."""
 
@@ -526,13 +538,15 @@ def render_results(structure: DetectedStructure, result: AnalysisResult) -> None
 
     render_result_metrics(result, structure)
 
-    tab_patterns, tab_timeline, tab_chat, tab_json = st.tabs(
-        ["Patterns", "Timeline", "Chat", "JSON"]
+    tab_patterns, tab_timeline, tab_graph, tab_chat, tab_json = st.tabs(
+        ["Patterns", "Timeline", "LangGraph", "Chat", "JSON"]
     )
     with tab_patterns:
         render_patterns_tab(result, structure)
     with tab_timeline:
         render_timeline_tab(structure)
+    with tab_graph:
+        render_graph_tab()
     with tab_chat:
         render_chat_tab(result)
     with tab_json:
@@ -545,6 +559,7 @@ def render_results(structure: DetectedStructure, result: AnalysisResult) -> None
             "structure",
             "analysis_result",
             "pattern_detector",
+            "graph_trace",
             "chat_messages",
             "selected_user",
         ]:
@@ -573,26 +588,29 @@ def main() -> None:
     data = parse_input_data()
     if data is not None:
         st.session_state.uploaded_data = data
-        structure = validate_structure(data)
-        if structure:
-            st.session_state.structure = structure
-            render_structure_preview(structure)
+        detected_structure = validate_structure(data)
+        if detected_structure:
+            st.session_state.structure = detected_structure
 
-            analyze_col, clear_col = st.columns([0.72, 0.28])
-            with analyze_col:
-                if st.button("Analyze JSON", type="primary", use_container_width=True):
-                    try:
-                        with st.spinner("Running temporal pattern reasoning..."):
-                            st.session_state.analysis_result = run_analysis(structure)
-                        st.session_state.chat_messages = []
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(str(exc))
-            with clear_col:
-                if st.button("Clear input", use_container_width=True):
-                    for key in ["uploaded_data", "structure", "analysis_result", "chat_messages"]:
-                        st.session_state.pop(key, None)
+    structure = st.session_state.get("structure")
+    if structure:
+        render_structure_preview(structure)
+
+        analyze_col, clear_col = st.columns([0.72, 0.28])
+        with analyze_col:
+            if st.button("Analyze JSON", type="primary", use_container_width=True):
+                try:
+                    with st.spinner("Running temporal pattern reasoning..."):
+                        st.session_state.analysis_result = run_analysis(structure)
+                    st.session_state.chat_messages = []
                     st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+        with clear_col:
+            if st.button("Clear input", use_container_width=True):
+                for key in ["uploaded_data", "structure", "analysis_result", "graph_trace", "chat_messages"]:
+                    st.session_state.pop(key, None)
+                st.rerun()
 
 
 if __name__ == "__main__":

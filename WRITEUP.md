@@ -2,7 +2,7 @@
 
 ## 1. Reasoning Approach
 
-I treated the assignment as a temporal evidence problem, not a keyword matching problem. The app first turns messy conversations into a reliable timeline per user, then asks the LLM to reason over that timeline and return only structured, source-backed JSON.
+I treated the assignment as a temporal evidence problem, not a keyword matching problem. The app first turns messy conversations into a reliable timeline per user, then runs an explicit LangGraph workflow that asks the LLM to reason over that timeline and return only structured, source-backed JSON.
 
 The deterministic Python layer does the parts that should not be left to the model:
 
@@ -11,6 +11,7 @@ The deterministic Python layer does the parts that should not be left to the mod
 - Normalize each user and conversation into Pydantic models.
 - Preserve source text from user messages, follow-ups, Clary responses, tags, severity, and timestamps.
 - Sort sessions chronologically per user.
+- Orchestrate the workflow through LangGraph nodes: prepare timelines, detect patterns, verify grounding, score/sort, and format output.
 - Validate model output and reject patterns that cite unknown sessions.
 - Calibrate confidence when evidence is too thin for the model's claimed score.
 
@@ -22,7 +23,7 @@ The LLM layer does the reasoning:
 - Produce a visible reasoning trace for each pattern. This is not private chain-of-thought; it is a concise audit trail with observation, temporal direction, recurrence/delay, intervention/dose-response when present, counter-evidence, and confidence.
 - Use cautious health wording such as "may be linked to", "consistent with", and "possible contributor".
 
-The app analyzes one user per LLM call. That is the context management strategy: each call gets a focused user timeline instead of the entire dataset. This reduces cross-user leakage, keeps prompts smaller, and makes it easier to validate session IDs against the correct user.
+The app analyzes one user per LLM call. That is the context management strategy: each call gets a focused user timeline instead of the entire dataset. This reduces cross-user leakage, keeps prompts smaller, and makes it easier to validate session IDs against the correct user. LangGraph makes these stages visible in the app through a workflow trace, so the reviewer can see the reasoning pipeline that produced the JSON.
 
 The final UI has two views: submission-ready patterns and all candidates. Submission-ready is a generic evidence-quality filter, not a hidden answer list. It hides low-confidence one-off candidates by default while keeping them available for transparency.
 
@@ -41,6 +42,8 @@ The fifth risk is missing subtle delayed patterns. Some patterns require domain 
 ## 3. What I Would Improve With More Time
 
 I would add a second LLM verifier pass. The first pass would propose candidate patterns; the verifier would search the source timeline for supporting evidence, counter-evidence, and duplicated umbrella patterns before final export.
+
+LangGraph makes that upgrade straightforward: the current graph can branch from candidate detection into a separate verifier node, then merge only grounded findings into the final JSON.
 
 I would add a timeline visualization showing trigger and symptom events on a date axis. That would make temporal direction easier to inspect than reading text alone.
 

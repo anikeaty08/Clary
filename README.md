@@ -14,6 +14,7 @@ The app does **not** hardcode the hidden pattern answer list. Python handles loa
 - Evidence trace with session IDs and dates
 - Counter-evidence and uncertainty checks
 - Confidence scoring
+- LangGraph workflow trace for the reasoning pipeline
 - Chat interface using stored analysis
 - Strict JSON export
 - Submission-ready export that filters weak one-off candidates while keeping all candidates available
@@ -26,6 +27,7 @@ The app does **not** hardcode the hidden pattern answer list. Python handles loa
 | Backend | Python |
 | LLM | OpenAI model from `OPENAI_MODEL` |
 | Default model | `gpt-4.1` in `.env.example`; your local `.env` can override it |
+| Orchestration | LangGraph `StateGraph` |
 | Validation | Pydantic v2 |
 | Output | Strict JSON |
 
@@ -139,15 +141,22 @@ The exported JSON follows this shape:
 ## Reasoning Pipeline
 
 1. `DataLoader` validates the upload and normalizes users/sessions.
-2. `TimelineBuilder` sorts each user history chronologically.
-3. `EventExtractor` packages all source text, tags, severity, follow-ups, and Clary responses without keyword answer tables.
-4. `PatternDetector` sends one user timeline at a time to the LLM.
+2. `ClaryReasoningGraph` runs the workflow as a LangGraph state machine:
+   `START -> prepare_timelines -> detect_patterns -> verify_patterns -> score_and_sort -> format_output -> END`.
+3. `prepare_timelines` sorts each user history chronologically and records the graph trace.
+4. `detect_patterns` uses `PatternDetector` to send one user timeline at a time to the LLM.
 5. The system prompt asks for high-value non-overlapping patterns, temporal direction checks, delay/recurrence reasoning, intervention or dose-response evidence, counter-evidence, cautious medical language, and strict JSON.
 6. OpenAI structured JSON schema is requested when supported, with JSON mode fallback.
-7. Pydantic validates the response and drops evidence that cites unknown sessions.
-8. `ConfidenceScorer` calibrates overconfident outputs using generic evidence-count and counter-evidence rules.
-9. `pattern_quality.py` separates submission-ready patterns from weaker exploratory candidates for the default view/export.
+7. `verify_patterns` rejects patterns whose cited sessions or evidence trace do not exist in the uploaded user's real sessions.
+8. `score_and_sort` applies generic confidence-quality ordering and counts submission-ready findings.
+9. `format_output` returns final Pydantic-validated JSON.
 10. Chat uses only the stored validated analysis JSON, not fresh hardcoded answers.
+
+## Why LangGraph Is Used
+
+LangGraph is used to make the reasoning pipeline explicit and inspectable. Each node owns one stage of the work: timeline preparation, LLM pattern generation, grounding verification, scoring/sorting, and final JSON formatting.
+
+This matters for the assignment because the system needs to show more than a single black-box prompt. The app can now display a workflow trace in the UI, and future improvements can add verifier branches, retries, or human review without rewriting the Streamlit app.
 
 ## Context And Chunking
 
@@ -157,6 +166,7 @@ The app analyzes one user per LLM call. This keeps the context focused, prevents
 
 - **Patterns tab**: default view shows submission-ready patterns. Switch to all candidates to inspect weak findings.
 - **Timeline tab**: shows raw chronological source context per user.
+- **LangGraph tab**: shows the graph route and execution trace for the current run.
 - **Chat tab**: asks questions over stored analysis only.
 - **JSON tab**: can export submission-ready patterns or all candidates.
 
@@ -182,6 +192,7 @@ ask-first/
 |   |-- pattern_detector.py
 |   |-- confidence_scorer.py
 |   |-- pattern_quality.py
+|   |-- reasoning_graph.py
 |   |-- llm_client.py
 |   |-- prompts.py
 |   `-- config.py

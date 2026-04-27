@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -9,10 +10,61 @@ from src.data_loader import DataLoader
 from src.llm_client import LLMClient
 from src.pattern_detector import PatternDetector
 from src.pattern_quality import filtered_result, is_submission_ready
+from src.reasoning_graph import ClaryReasoningGraph
 from src.schemas import AnalysisResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class FakeLLM:
+    """Small fake LLM used to test LangGraph orchestration without API calls."""
+
+    def structured_completion(self, messages, system_prompt=None, response_format=None):
+        context = messages[0]["content"]
+        user_match = re.search(r"user_id: ([A-Z0-9_]+)", context)
+        session_match = re.search(r"## ([A-Z0-9_]+_S\d+)", context)
+        user_id = user_match.group(1) if user_match else "USER"
+        session_id = session_match.group(1) if session_match else f"{user_id}_S01"
+        return json.dumps(
+            {
+                "patterns": [
+                    {
+                        "pattern_id": "P1",
+                        "user_id": user_id,
+                        "title": "Single-session candidate may need more evidence",
+                        "confidence": "medium",
+                        "confidence_reason": "One source session is enough for a candidate but not strong confidence.",
+                        "sessions_involved": [session_id],
+                        "temporal_reasoning": "The candidate was evaluated against timeline order.",
+                        "reasoning_trace": [
+                            {
+                                "step": "observation",
+                                "detail": f"{session_id} contains the source observation.",
+                            },
+                            {
+                                "step": "confidence",
+                                "detail": "Confidence should be calibrated because support is thin.",
+                            },
+                        ],
+                        "evidence_trace": [
+                            {
+                                "session_id": session_id,
+                                "date": "2026-01-01",
+                                "evidence": "Source-backed test evidence.",
+                            }
+                        ],
+                        "counter_evidence": [],
+                    }
+                ]
+            }
+        )
+
+    def complete(self, messages, system_prompt=None):
+        return "fake chat response"
+
+    def stream_completion(self, messages, system_prompt=None):
+        yield "fake chat response"
 
 
 class PipelineTests(unittest.TestCase):
@@ -150,6 +202,18 @@ class PipelineTests(unittest.TestCase):
 
         self.assertEqual(len(ready), 1)
         self.assertEqual(result.total_patterns, 1)
+
+    def test_langgraph_orchestrates_reasoning_pipeline(self) -> None:
+        graph = ClaryReasoningGraph(FakeLLM())
+
+        run = graph.run(self.structure)
+
+        self.assertEqual(run.result.total_users, 3)
+        self.assertEqual(run.result.total_patterns, 3)
+        self.assertTrue(any("prepare_timelines" in item for item in run.graph_trace))
+        self.assertTrue(any("detect_patterns" in item for item in run.graph_trace))
+        self.assertTrue(any("verify_patterns" in item for item in run.graph_trace))
+        self.assertTrue(any("format_output" in item for item in run.graph_trace))
 
 
 if __name__ == "__main__":
