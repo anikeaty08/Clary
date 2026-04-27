@@ -163,6 +163,23 @@ st.markdown(
         div[data-testid="stFileUploaderDropzone"] small {
             color: var(--muted) !important;
         }
+        /* Text area placeholder styling */
+        textarea::placeholder {
+            color: var(--muted) !important;
+            opacity: 1 !important;
+        }
+        textarea {
+            color: var(--ink) !important;
+            font-size: 14px !important;
+        }
+        .stTextArea textarea {
+            color: var(--ink) !important;
+            background: #ffffff !important;
+        }
+        .stTextArea label {
+            color: var(--ink) !important;
+            font-weight: 700 !important;
+        }
         @media (max-width: 760px) {
             .metric-strip {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
