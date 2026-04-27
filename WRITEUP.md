@@ -2,49 +2,50 @@
 
 ## 1. Reasoning Approach
 
-The app treats pattern detection as a timeline and evidence problem, not a keyword search problem.
+I treated the assignment as a temporal evidence problem, not a keyword matching problem. The app first turns messy conversations into a reliable timeline per user, then asks the LLM to reason over that timeline and return only structured, source-backed JSON.
 
-Python owns the deterministic parts:
+The deterministic Python layer does the parts that should not be left to the model:
 
-- Validate that the upload matches the assignment-style JSON shape.
-- Ignore hidden/reference/answer keys outside the user conversation data.
-- Normalize users and sessions into Pydantic models.
-- Sort each user's sessions into a chronological timeline.
-- Package all source text, follow-ups, tags, severity, and assistant responses for the model.
-- Validate the model output and reject patterns that cite unknown sessions.
-- Request a strict JSON schema from the model when supported, then validate again with Pydantic.
+- Validate the uploaded assignment-style JSON.
+- Ignore top-level hidden/reference/answer keys so planted answers are never sent to the model.
+- Normalize each user and conversation into Pydantic models.
+- Preserve source text from user messages, follow-ups, Clary responses, tags, severity, and timestamps.
+- Sort sessions chronologically per user.
+- Validate model output and reject patterns that cite unknown sessions.
+- Calibrate confidence when evidence is too thin for the model's claimed score.
 
-The LLM owns the reasoning step:
+The LLM layer does the reasoning:
 
-- Infer symptoms, triggers, lifestyle changes, improvements, worsening, and repeated episodes from the uploaded sessions.
-- Connect events only when the dates and ordering support the connection.
-- Explain temporal reasoning, including delays, repeated examples, and intervention response.
-- Check counter-evidence and possible alternative explanations.
-- Produce a visible reasoning trace that shows observation, temporal direction, recurrence or delay, intervention/dose response when present, counter-evidence, and confidence.
-- Use cautious non-diagnostic wording.
+- Infer symptoms, triggers, lifestyle changes, improvements, worsening, recurrence, delays, and possible counter-evidence from the uploaded sessions.
+- Connect events only when the timeline supports the direction: the possible trigger must happen before the symptom or improvement it explains.
+- Look for repeated patterns, delayed patterns, dose/threshold patterns, reversal after intervention, and one root behavior linked to multiple downstream effects.
+- Produce a visible reasoning trace for each pattern. This is not private chain-of-thought; it is a concise audit trail with observation, temporal direction, recurrence/delay, intervention/dose-response when present, counter-evidence, and confidence.
+- Use cautious health wording such as "may be linked to", "consistent with", and "possible contributor".
 
-Confidence is handled in two layers. First, the model explains confidence using evidence and counter-evidence. Second, a generic confidence guard caps scores that are too strong for the number of supporting sessions or the amount of uncertainty.
+The app analyzes one user per LLM call. That is the context management strategy: each call gets a focused user timeline instead of the entire dataset. This reduces cross-user leakage, keeps prompts smaller, and makes it easier to validate session IDs against the correct user.
 
-The reasoning trace is deliberately not private chain-of-thought. It is an audit trail made of source-backed checks the user can inspect. The chat interface does not re-run raw pattern detection. It answers from the stored validated analysis JSON, which keeps follow-up answers grounded in the same evidence trace the user can export.
+The final UI has two views: submission-ready patterns and all candidates. Submission-ready is a generic evidence-quality filter, not a hidden answer list. It hides low-confidence one-off candidates by default while keeping them available for transparency.
 
 ## 2. Failure Cases And Hallucination Risks
 
-The largest risk is a plausible but unsupported pattern. A model can over-connect events that happen close together, especially when there are only one or two sessions. The app reduces that risk by requiring session IDs, dates, evidence traces, and counter-evidence for every pattern.
+The biggest risk is over-connecting plausible events. A model may see two events near each other and infer a relationship even when the evidence is thin. The app reduces this risk by requiring session IDs, dates, evidence trace, temporal reasoning, and counter-evidence for every pattern.
 
-The second risk is invented evidence. The parser filters out evidence that references session IDs not present in the upload, and Pydantic rejects malformed output. This does not prove every interpretation is correct, but it prevents fake sessions from entering the final JSON.
+The second risk is invented or wrong evidence. The parser filters out evidence that references session IDs not present in that user's uploaded data. Pydantic also rejects malformed pattern objects.
 
-The third risk is overconfident medical language. The system prompt forbids diagnosis claims and requires language such as "may be linked to", "consistent with", and "possible contributor". The confidence scorer also lowers confidence when support is thin or clear uncertainty is present.
+The third risk is noisy extra patterns. The assignment has deliberately planted patterns, but a model may also surface broad lifestyle context or one-off low-confidence observations. The app handles this honestly: it keeps all candidates available, but defaults to a submission-ready view that filters weak candidates.
 
-The fourth risk is missing subtle delayed or multi-factor patterns. The prompt asks the model to consider timing, delays, repeated symptoms, improvements after changes, and alternative causes, but a production system would need stronger verification and domain knowledge.
+The fourth risk is overconfident health language. The prompt forbids diagnosis claims and the confidence scorer reduces scores when support is thin or uncertainty is explicit. The app should be read as health pattern reasoning, not medical advice.
 
-## 3. Improvements With More Time
+The fifth risk is missing subtle delayed patterns. Some patterns require domain knowledge about delayed symptoms or multi-step effects. Prompting helps, but a production system would need a separate verifier and a curated clinical knowledge layer.
 
-I would add a verifier pass that separately checks each proposed pattern against the original sessions and explicitly searches for counter-evidence.
+## 3. What I Would Improve With More Time
 
-I would add timeline visualizations so users can see the sequence of events before reading the pattern explanation.
+I would add a second LLM verifier pass. The first pass would propose candidate patterns; the verifier would search the source timeline for supporting evidence, counter-evidence, and duplicated umbrella patterns before final export.
 
-I would add chunk-and-merge support for very large uploads: analyze date windows per user, merge candidate patterns, then run a final evidence verification pass.
+I would add a timeline visualization showing trigger and symptom events on a date axis. That would make temporal direction easier to inspect than reading text alone.
 
-I would add stricter structured outputs with a full JSON schema at the API boundary, plus automated tests that feed adversarial JSON and verify that no hidden/reference sections are used.
+I would add larger-dataset chunking: analyze each user's timeline in date windows, merge candidate patterns, then run a final per-user verification pass.
 
-I would also add clinician-reviewed safety copy and escalation language for severe symptoms, while keeping the app framed as pattern reasoning and not medical advice.
+I would add clinician-reviewed safety copy for severe symptoms and escalation cases while keeping the system framed as pattern discovery, not diagnosis.
+
+I would add evaluation scripts that compare model outputs against a private rubric without exposing hidden answers in the repository.

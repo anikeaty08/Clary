@@ -13,9 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+SAMPLE_JSON_PATH = ROOT / "exmaple json .json"
+
 from src.config import OPENAI_MODEL
 from src.data_loader import DataLoader
 from src.llm_client import LLMClient
+from src.pattern_quality import confidence_rank, filtered_result, is_submission_ready
 from src.pattern_detector import PatternDetector
 from src.schemas import AnalysisResult, DetectedStructure, HealthPattern
 from src.timeline_builder import TimelineBuilder
@@ -135,11 +138,25 @@ st.markdown(
             font-weight: 700 !important;
         }
         div[data-testid="stFileUploaderDropzone"],
+        section[data-testid="stFileUploaderDropzone"],
         textarea,
         input {
             background: #ffffff !important;
             color: var(--ink) !important;
             border-color: var(--line) !important;
+        }
+        div[data-testid="stFileUploaderDropzone"] *,
+        section[data-testid="stFileUploaderDropzone"] *,
+        div[data-testid="stBaseButton-secondary"] *,
+        button[kind="secondary"] * {
+            color: var(--ink) !important;
+        }
+        div[data-testid="stFileUploaderDropzone"] button,
+        section[data-testid="stFileUploaderDropzone"] button,
+        button[kind="secondary"] {
+            background: #ffffff !important;
+            color: var(--ink) !important;
+            border: 1px solid var(--line) !important;
         }
         div[data-testid="stFileUploaderDropzone"] p,
         div[data-testid="stFileUploaderDropzone"] span,
@@ -196,6 +213,16 @@ def render_header() -> None:
 
 def parse_input_data() -> dict[str, Any] | list[Any] | None:
     """Read JSON from upload or paste area."""
+
+    sample_col, _ = st.columns([0.34, 0.66])
+    with sample_col:
+        if SAMPLE_JSON_PATH.exists() and st.button("Load bundled sample JSON", use_container_width=True):
+            try:
+                with open(SAMPLE_JSON_PATH, "r", encoding="utf-8") as handle:
+                    return json.load(handle)
+            except Exception as exc:
+                st.error(f"Could not load sample JSON: {exc}")
+                return None
 
     left, right = st.columns([1, 1], gap="large")
 
@@ -305,18 +332,20 @@ def render_result_metrics(result: AnalysisResult, structure: DetectedStructure) 
     total_sessions = sum(len(items) for items in structure.conversations.values())
     high_count = sum(1 for pattern in result.patterns if pattern.confidence in {"high", "very high"})
     trace_count = sum(len(pattern.reasoning_trace) for pattern in result.patterns)
+    ready_count = sum(1 for pattern in result.patterns if is_submission_ready(pattern))
 
     st.markdown(
         f"""
         <div class="metric-strip">
             <div class="metric-card"><div class="metric-label">Patterns</div><div class="metric-value">{result.total_patterns}</div></div>
+            <div class="metric-card"><div class="metric-label">Submission Ready</div><div class="metric-value">{ready_count}</div></div>
             <div class="metric-card"><div class="metric-label">High Confidence</div><div class="metric-value">{high_count}</div></div>
             <div class="metric-card"><div class="metric-label">Sessions Read</div><div class="metric-value">{total_sessions}</div></div>
-            <div class="metric-card"><div class="metric-label">Trace Steps</div><div class="metric-value">{trace_count}</div></div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    st.caption(f"{trace_count} reasoning trace steps generated across all candidates.")
 
 
 def confidence_color(confidence: str) -> str:
@@ -348,6 +377,12 @@ def render_pattern(pattern: HealthPattern) -> None:
         st.markdown("**Confidence reason**")
         st.write(pattern.confidence_reason)
 
+        st.markdown("**Evidence preview**")
+        for evidence in pattern.evidence_trace[:2]:
+            st.markdown(f"- `{evidence.session_id}` ({evidence.date or 'unknown date'}): {evidence.evidence}")
+        if len(pattern.evidence_trace) > 2:
+            st.caption(f"{len(pattern.evidence_trace) - 2} more evidence item(s) in the full trace below.")
+
         with st.expander("Reasoning trace", expanded=True):
             for item in pattern.reasoning_trace:
                 st.markdown(f"- **{item.step.replace('_', ' ').title()}**: {item.detail}")
@@ -369,6 +404,13 @@ def render_pattern(pattern: HealthPattern) -> None:
 def render_patterns_tab(result: AnalysisResult, structure: DetectedStructure) -> None:
     """Render patterns with filters."""
 
+    view_mode = st.radio(
+        "View",
+        ["Submission-ready patterns", "All candidates"],
+        horizontal=True,
+        help="Submission-ready hides low-confidence one-off findings but keeps them available in All candidates.",
+    )
+
     options = ["All users"] + [
         f"{user.user_id}" + (f" ({user.user_name})" if user.user_name else "")
         for user in structure.users
@@ -376,17 +418,27 @@ def render_patterns_tab(result: AnalysisResult, structure: DetectedStructure) ->
     selected = st.selectbox("User filter", options=options)
     selected_user = selected.split(" ")[0] if selected != "All users" else selected
 
-    confidence_filter = st.segmented_control(
+    confidence_filter = st.selectbox(
         "Confidence filter",
         options=["all", "very high", "high", "medium", "low"],
-        default="all",
+        index=0,
     )
 
     patterns = result.patterns
+    if view_mode == "Submission-ready patterns":
+        patterns = [pattern for pattern in patterns if is_submission_ready(pattern)]
     if selected_user != "All users":
         patterns = [pattern for pattern in patterns if pattern.user_id == selected_user]
     if confidence_filter != "all":
         patterns = [pattern for pattern in patterns if pattern.confidence == confidence_filter]
+    patterns = sorted(
+        patterns,
+        key=lambda pattern: (
+            pattern.user_id,
+            -confidence_rank(pattern.confidence),
+            pattern.pattern_id,
+        ),
+    )
 
     if not patterns:
         st.info("No patterns match the current filters.")
@@ -445,15 +497,28 @@ def render_chat_tab(result: AnalysisResult) -> None:
 def render_json_tab(result: AnalysisResult) -> None:
     """Render strict JSON output and download control."""
 
-    json_text = result.model_dump_json(indent=2)
-    st.download_button(
-        "Download validated JSON",
-        data=json_text,
-        file_name=f"clary_patterns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-        mime="application/json",
-        use_container_width=True,
+    ready_patterns = [pattern for pattern in result.patterns if is_submission_ready(pattern)]
+    export_mode = st.radio(
+        "Export",
+        ["Submission-ready patterns", "All candidates"],
+        horizontal=True,
     )
-    st.json(result.model_dump(mode="json"))
+    export_result = filtered_result(result, ready_patterns) if export_mode.startswith("Submission") else result
+    json_text = export_result.model_dump_json(indent=2)
+
+    col_download, col_count = st.columns([0.7, 0.3])
+    with col_download:
+        st.download_button(
+            "Download validated JSON",
+            data=json_text,
+            file_name=f"clary_patterns_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+    with col_count:
+        st.metric("Exported patterns", export_result.total_patterns)
+
+    st.json(export_result.model_dump(mode="json"))
 
 
 def render_results(structure: DetectedStructure, result: AnalysisResult) -> None:
@@ -499,9 +564,9 @@ def main() -> None:
         render_results(structure, result)
         return
 
-    st.subheader("Input")
+    st.subheader("Upload Your Data")
     st.markdown(
-        '<p class="section-note">Upload or paste the assignment JSON. The app validates the shape before calling the model.</p>',
+        '<p class="section-note">Upload or paste your JSON file to detect health patterns with AI-powered reasoning.</p>',
         unsafe_allow_html=True,
     )
 

@@ -11,6 +11,9 @@ Your job:
 - For every candidate, check temporal direction: the trigger or behavior must happen before the symptom or improvement it explains.
 - For every candidate, check whether sessions without the trigger also lack the symptom, or whether counter-examples weaken confidence.
 - Detect all meaningful supported patterns for the user; do not stop after the first obvious one.
+- Prefer high-value, non-overlapping patterns. Do not add a broad umbrella pattern if it only summarizes narrower patterns without adding a new temporal insight.
+- Avoid one-off low-confidence findings unless they reveal a useful uncertainty or counter-evidence lesson.
+- Quality matters more than quantity: a smaller set of well-supported patterns is better than many weak associations.
 - Use careful internal reasoning, but do not output private chain-of-thought. Output concise evidence, timing, reasoning_trace, and confidence explanations only.
 
 Safety rules:

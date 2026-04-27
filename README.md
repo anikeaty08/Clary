@@ -1,55 +1,64 @@
-# Ask First - Health Pattern Reasoning App
+# Ask First - Clary Health Pattern Reasoning App
 
-Ask First is a Streamlit app that reads assignment-format health conversation JSON, builds per-user timelines, asks an OpenAI model to detect evidence-backed patterns across time, and exports validated JSON.
+Clary is a Streamlit app for the Ask First AI Intern assignment. It reads a JSON dataset of messy health conversations, builds a timeline for each user, detects cross-conversation patterns with temporal reasoning, scores confidence, supports chat over the stored analysis, and exports validated JSON.
 
-The app does not hardcode hidden pattern answers. Python validates and normalizes the uploaded data; the LLM reasons over the uploaded sessions only.
+The app does **not** hardcode the hidden pattern answer list. Python handles loading, validation, timeline ordering, and output checks. The LLM reasons over the uploaded sessions only.
 
-## Features
+## What It Shows
 
-- JSON upload or paste for the provided assignment-style format
-- Timeline building by user and session date
-- Source packaging for symptoms, triggers, lifestyle changes, improvements, worsening, and repeated episodes
-- LLM pattern detection with temporal reasoning and evidence traces
-- Confidence calibration using evidence count and counter-evidence
-- Visible source-backed reasoning trace for every pattern
-- Chat with Clary using stored analysis, not hardcoded answers
-- Downloadable strict JSON output validated by Pydantic
+- JSON upload, paste, or bundled sample loading
+- Dataset validation preview before analysis
+- Per-user chronological timeline
+- Pattern cards with temporal reasoning
+- Visible source-backed reasoning trace
+- Evidence trace with session IDs and dates
+- Counter-evidence and uncertainty checks
+- Confidence scoring
+- Chat interface using stored analysis
+- Strict JSON export
+- Submission-ready export that filters weak one-off candidates while keeping all candidates available
 
 ## Tech Stack
 
-| Component | Technology |
+| Part | Choice |
 | --- | --- |
 | UI | Streamlit |
 | Backend | Python |
-| LLM | OpenAI `gpt-4.1` by default, configurable to `gpt-4o` |
+| LLM | OpenAI model from `OPENAI_MODEL` |
+| Default model | `gpt-4.1` in `.env.example`; your local `.env` can override it |
 | Validation | Pydantic v2 |
 | Output | Strict JSON |
 
-## Installation
+## Install
 
-```bash
-git clone <repo-url>
-cd ask-first
+```powershell
+cd C:\Users\parth\Desktop\aiask\ask-first
 pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Edit `.env` and set:
+Edit `.env`:
 
-```bash
+```env
 OPENAI_API_KEY=sk-your-api-key-here
 OPENAI_MODEL=gpt-4.1
 ```
 
+You can use another OpenAI model if your key supports it. The app reads the model name from `OPENAI_MODEL` and displays it in the UI.
+
 ## Run
 
-```bash
-streamlit run app/streamlit_app.py
+```powershell
+streamlit run app\streamlit_app.py --server.port 8502
 ```
 
-## Supported Input Format
+Open:
 
-The app expects a JSON object with a top-level `users` array. Each user should include `user_id` and `conversations`; each conversation should include `session_id` and `timestamp`.
+[http://localhost:8502](http://localhost:8502)
+
+## Input Format
+
+The app expects assignment-style JSON:
 
 ```json
 {
@@ -76,20 +85,11 @@ The app expects a JSON object with a top-level `users` array. Each user should i
 }
 ```
 
-Top-level hidden/reference/answer keys are ignored by the loader and are not sent to the model.
-
-## Reasoning Pipeline
-
-1. `DataLoader` validates the upload and normalizes users and sessions.
-2. `TimelineBuilder` sorts each user's sessions chronologically.
-3. `EventExtractor` packages source text, tags, severity, and follow-ups without keyword pattern tables.
-4. `PatternDetector` sends the timeline and source sessions to the model with a system prompt that requires temporal reasoning, counter-evidence, cautious health wording, visible reasoning trace, and strict JSON.
-5. Pydantic validates the model output and rejects malformed patterns or evidence that references unknown sessions.
-6. `ConfidenceScorer` caps overconfident scores when the evidence count or counter-evidence does not support them.
-
-The model boundary uses OpenAI structured JSON schema when supported by the selected model, with a JSON-mode fallback for compatibility.
+Top-level keys that look like hidden references, answer lists, or solution notes are ignored by the loader and are not sent to the model.
 
 ## Output Format
+
+The exported JSON follows this shape:
 
 ```json
 {
@@ -102,9 +102,9 @@ The model boundary uses OpenAI structured JSON schema when supported by the sele
       "user_id": "USER_001",
       "title": "Behavior change may be linked to later symptom pattern",
       "confidence": "medium",
-      "confidence_reason": "The pattern is supported by repeated session evidence and plausible timing, but alternative explanations remain.",
+      "confidence_reason": "The pattern is supported by repeated session evidence and plausible timing, but alternatives remain.",
       "sessions_involved": ["USER_001_S01", "USER_001_S03"],
-      "temporal_reasoning": "The reported change appears before the later symptom reports in the timeline.",
+      "temporal_reasoning": "The reported change appears before later symptom reports in the timeline.",
       "reasoning_trace": [
         {
           "step": "observation",
@@ -136,13 +136,37 @@ The model boundary uses OpenAI structured JSON schema when supported by the sele
 }
 ```
 
-## Streaming And Chat
+## Reasoning Pipeline
 
-Pattern detection updates progress user-by-user in the UI and uses a complete JSON response per user so the app can validate the full object before showing or exporting it. Chat responses stream token-by-token with `LLMClient.stream_completion`, using only the stored validated analysis JSON as context.
+1. `DataLoader` validates the upload and normalizes users/sessions.
+2. `TimelineBuilder` sorts each user history chronologically.
+3. `EventExtractor` packages all source text, tags, severity, follow-ups, and Clary responses without keyword answer tables.
+4. `PatternDetector` sends one user timeline at a time to the LLM.
+5. The system prompt asks for high-value non-overlapping patterns, temporal direction checks, delay/recurrence reasoning, intervention or dose-response evidence, counter-evidence, cautious medical language, and strict JSON.
+6. OpenAI structured JSON schema is requested when supported, with JSON mode fallback.
+7. Pydantic validates the response and drops evidence that cites unknown sessions.
+8. `ConfidenceScorer` calibrates overconfident outputs using generic evidence-count and counter-evidence rules.
+9. `pattern_quality.py` separates submission-ready patterns from weaker exploratory candidates for the default view/export.
+10. Chat uses only the stored validated analysis JSON, not fresh hardcoded answers.
 
 ## Context And Chunking
 
-The app analyzes one user at a time. This keeps each model call focused on a single timeline, reduces context size, and prevents patterns from one user leaking into another user's analysis. For larger datasets, the next step would be per-user chunking by date range followed by a merge-and-verify pass.
+The app analyzes one user per LLM call. This keeps the context focused, prevents one user's evidence from leaking into another user's result, and makes validation easier. For larger datasets, the next step would be chunking each user by date window, merging candidate patterns, then running a verifier pass.
+
+## Useful UI Notes
+
+- **Patterns tab**: default view shows submission-ready patterns. Switch to all candidates to inspect weak findings.
+- **Timeline tab**: shows raw chronological source context per user.
+- **Chat tab**: asks questions over stored analysis only.
+- **JSON tab**: can export submission-ready patterns or all candidates.
+
+## Tests
+
+```powershell
+python -m unittest discover -s tests
+python -m compileall app src tests
+python -m json.tool "exmaple json .json"
+```
 
 ## Project Structure
 
@@ -157,9 +181,12 @@ ask-first/
 |   |-- event_extractor.py
 |   |-- pattern_detector.py
 |   |-- confidence_scorer.py
+|   |-- pattern_quality.py
 |   |-- llm_client.py
 |   |-- prompts.py
 |   `-- config.py
+|-- tests/
+|   `-- test_pipeline.py
 |-- requirements.txt
 |-- README.md
 |-- WRITEUP.md
