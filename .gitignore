@@ -1,0 +1,20 @@
+# Ask First
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# Ignore IDE
+.vscode/
+.idea/
+
+# Ignore outputs
+outputs/
+*.json
+
+# Ignore Streamlit
+.streamlit/

@@ -6,13 +6,10 @@ load_dotenv()
 
 # OpenAI API
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1")
 
-# Pattern detection settings
-MAX_PATTERNS_PER_USER = 5
-MIN_SESSIONS_FOR_PATTERN = 2
-
-# Confidence thresholds
+# Generic confidence thresholds. These are not health-pattern answers; they are
+# evidence-count guards used to prevent overconfident output.
 CONFIDENCE_THRESHOLDS = {
     "very high": 4,  # 4+ supporting sessions
     "high": 3,       # 3+ supporting sessions
