@@ -41,8 +41,7 @@ class LLMClient:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=full_messages,
-                stream=True,
-                temperature=0.3
+                stream=True
             )
 
             for chunk in response:
@@ -70,8 +69,7 @@ class LLMClient:
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=full_messages,
-                temperature=0.3
+                messages=full_messages
             )
 
             return response.choices[0].message.content
@@ -101,8 +99,7 @@ class LLMClient:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=full_messages,
-                response_format=selected_response_format,
-                temperature=0.1
+                response_format=selected_response_format
             )
 
             return response.choices[0].message.content
@@ -114,7 +111,6 @@ class LLMClient:
                         model=self.model,
                         messages=full_messages,
                         response_format={"type": "json_object"},
-                        temperature=0.1,
                     )
                     return response.choices[0].message.content
                 except Exception as fallback_error:
